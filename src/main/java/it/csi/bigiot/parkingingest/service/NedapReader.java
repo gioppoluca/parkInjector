@@ -34,12 +34,12 @@ public class NedapReader {
 	private static final Logger log = LoggerFactory.getLogger(NedapReader.class);
 
 	@Autowired
-    public JavaMailSender emailSender;
-	
+	public JavaMailSender emailSender;
+
 	// set this to false to disable this job; set it it true by
 	@Value("${ingester.enabled:false}")
 	private boolean scheduledJobEnabled;
-	
+
 	@Value("${SDP_auth}")
 	private String SDP_auth;
 
@@ -47,7 +47,7 @@ public class NedapReader {
 	// JSONParser parser = new JSONParser();
 	@Value("#{${parkSDPLots}}")
 	private Map<String, String> parkSDPLots;
-	
+
 	private RestTemplate restTemplate = new RestTemplate();
 
 	@Scheduled(fixedRateString = "${ingester.fixedRate}") // every 30 seconds
@@ -57,6 +57,9 @@ public class NedapReader {
 			return;
 		}
 
+		log.info("LOT INFO");
+		log.info(parkSDPLots.toString());
+		log.info(parkSDPLots.get("LOT_011"));
 		String transactionUrl = "http://csipiemonte.tmacs.it:8080/csipiemontewebservices/webresources/park/getparkstate";
 
 		UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(transactionUrl)
@@ -76,8 +79,12 @@ public class NedapReader {
 					JSONObject aLot = lots.getJSONObject(i);
 					if (previousRead.containsKey(aLot.getString("lot_code"))) {
 						log.info("Already red the lot: " + aLot.getString("lot_code"));
-
-						publishToSDP(aLot);
+						if (!((ParkLot) previousRead.get(aLot.getString("lot_code"))).getStatus()
+								.equals(aLot.getString("lot_state"))) {
+							publishToSDP(aLot);
+							ParkLot changedLot = new ParkLot(aLot.getString("lot_state"), aLot.getLong("lot_timestamp"));
+							previousRead.put(aLot.getString("lot_code"), changedLot);
+						}
 					} else {
 						ParkLot newLot = new ParkLot(aLot.getString("lot_state"), aLot.getLong("lot_timestamp"));
 						previousRead.put(aLot.getString("lot_code"), newLot);
@@ -89,13 +96,13 @@ public class NedapReader {
 			// TODO Auto-generated catch block
 			log.info("eccezione gestita");
 			e.printStackTrace();
-			
-			SimpleMailMessage message = new SimpleMailMessage(); 
-	        message.setTo("luca.gioppo@csi.it"); 
-	        message.setSubject("********** Error from NedapReader *********"); 
-	        message.setText(e.toString());
-	        emailSender.send(message);
-			
+
+			SimpleMailMessage message = new SimpleMailMessage();
+			message.setTo("luca.gioppo@csi.it");
+			message.setSubject("********** Error from NedapReader *********");
+			message.setText(e.toString());
+			emailSender.send(message);
+
 		}
 
 	}
@@ -107,44 +114,41 @@ public class NedapReader {
 	private void publishToSDP(JSONObject aLot) throws JSONException {
 		// Now check with the previous data if the data is the
 		// same or not
-		if (!((ParkLot) previousRead.get(aLot.getString("lot_code"))).getStatus()
-				.equals(aLot.getString("lot_state"))) {
-			// changed status
-			log.info("changed status from: "
-					+ ((ParkLot) previousRead.get(aLot.getString("lot_code"))).getStatus() + " to "
-					+ aLot.getString("lot_state"));
 
-			Date changeTime = new Date((long)aLot.getLong("lot_timestamp")*1000);
-			DateFormat f = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
-			log.info(f.format(changeTime));
-			
-			String parkSDPUrl = "https://stream.smartdatanet.it/api/input/vercelli_bigiot";
-			log.info(parkSDPLots.get(aLot.getString("lot_code")));
+		// changed status
+		log.info("changed status from: " + ((ParkLot) previousRead.get(aLot.getString("lot_code"))).getStatus() + " to "
+				+ aLot.getString("lot_state"));
 
-			HttpHeaders headers = new HttpHeaders();
-			headers.add("Content-Type", "application/json");
-			headers.add("Authorization", "Basic "+SDP_auth);
-			String sdpPostData = "{\"sensor\": \""+parkSDPLots.get(aLot.getString("lot_code"))+"\", \"stream\": \"parkingStatus\", \"values\": [{ \"time\": \""+f.format(changeTime)+"\", \"components\": {\"status\": \""
-					+ aLot.getString("lot_state") + "\"}}]}";
+		Date changeTime = new Date((long) aLot.getLong("lot_timestamp") * 1000);
+		DateFormat f = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
+		log.info(f.format(changeTime));
 
-			log.info(sdpPostData);
-			HttpEntity<String> entity = new HttpEntity<String>(sdpPostData, headers);
+		String parkSDPUrl = "https://stream.smartdatanet.it/api/input/vercelli_bigiot";
+		log.info(parkSDPLots.get(aLot.getString("lot_code")));
+		log.info("changing lot is: " + aLot.getString("lot_code"));
+		log.info(parkSDPLots.toString());
 
-			ResponseEntity<String> sdpResponse = restTemplate.exchange(parkSDPUrl, HttpMethod.POST,
-					entity, String.class);
-			if (sdpResponse.getStatusCode() == HttpStatus.OK) {
-				JSONObject userJson = new JSONObject(sdpResponse.getBody());
-				log.info(sdpResponse.toString());
-			} else if (sdpResponse.getStatusCode() == HttpStatus.UNAUTHORIZED) {
-				// nono... bad credentials
-				log.info(sdpResponse.toString());
-			} else {
-				log.info(sdpResponse.toString());
-			}
+		HttpHeaders headers = new HttpHeaders();
+		headers.add("Content-Type", "application/json");
+		headers.add("Authorization", "Basic " + SDP_auth);
+		String sdpPostData = "{\"sensor\": \"" + parkSDPLots.get(aLot.getString("lot_code"))
+				+ "\", \"stream\": \"parkingStatus\", \"values\": [{ \"time\": \"" + f.format(changeTime)
+				+ "\", \"components\": {\"status\": \"" + aLot.getString("lot_state") + "\"}}]}";
 
-			
+		log.info(sdpPostData);
+		HttpEntity<String> entity = new HttpEntity<String>(sdpPostData, headers);
 
+		ResponseEntity<String> sdpResponse = restTemplate.exchange(parkSDPUrl, HttpMethod.POST, entity, String.class);
+		if (sdpResponse.getStatusCode() == HttpStatus.OK) {
+			JSONObject userJson = new JSONObject(sdpResponse.getBody());
+			log.info(sdpResponse.toString());
+		} else if (sdpResponse.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+			// nono... bad credentials
+			log.info(sdpResponse.toString());
+		} else {
+			log.info(sdpResponse.toString());
 		}
+
 	}
 
 }
