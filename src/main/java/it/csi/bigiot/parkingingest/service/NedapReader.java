@@ -91,6 +91,8 @@ public class NedapReader {
 					}
 				}
 
+			}else{
+				log.info("DATA FROM CLOUD NOT VALID!!!!!!");
 			}
 		} catch (Exception e) {
 			// TODO Auto-generated catch block
